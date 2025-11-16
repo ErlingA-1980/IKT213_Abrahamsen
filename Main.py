@@ -2,88 +2,94 @@ import cv2
 import numpy as np
 import os
 
+# ===============================
+# Paths
+# ===============================
+base_path = r"C:\Users\erlin\Skole_hostsemester_2025\IKT213_Abrahamsen\assignment_4"
 
+reference_path = os.path.join(base_path, "reference_img.png")
+align_path = os.path.join(base_path, "align_this.jpg")
+
+harris_output = os.path.join(base_path, "harris.png")
+matches_output = os.path.join(base_path, "matches.jpg")
+aligned_output = os.path.join(base_path, "aligned.jpg")
+
+
+# ===============================
 # 1. Harris Corner Detection
-def harris_corner_detection(reference_image_path, save_path="harris.png"):
-
-    print("[INFO] Starting Harris Corner Detection...")
-
-    # Read the image
-    img = cv2.imread(reference_image_path)
-    if img is None:
-        print(f"[ERROR] Could not load image: {reference_image_path}")
-        return
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# ===============================
+def detect_harris(reference_img, save_path):
+    gray = cv2.cvtColor(reference_img, cv2.COLOR_BGR2GRAY)
     gray = np.float32(gray)
 
-    # Harris corner detection
-    dst = cv2.cornerHarris(gray, blockSize=2, ksize=3, k=0.04)
+    dst = cv2.cornerHarris(gray, 2, 3, 0.04)
     dst = cv2.dilate(dst, None)
 
-    # Thrshold and corners
-    img[dst > 0.01 * dst.max()] = [0, 0, 255]
+    corner_img = reference_img.copy()
+    threshold = 0.1 * dst.max()
+    corners = np.where(dst > threshold)
+    corner_img[corners] = [0, 0, 255]
 
-    # Save
-    cv2.imwrite(save_path, img)
-    print(f"[INFO] Harris corners saved as: {os.path.abspath(save_path)}")
+    cv2.imwrite(save_path, corner_img)
+    print(f"[INFO] Harris corners saved to {save_path}")
 
 
+# ===============================
+# 2. SIFT Alignment + Matches
+# ===============================
+def align_images_sift_custom(img_to_align, ref_img, max_features=5000, good_match_percent=0.7,
+                             save_matches_path=matches_output, save_aligned_path=aligned_output):
 
-# 2. Feature-Based Image Alignment (SIFT)
+    gray_ref = cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY)
+    gray_align = cv2.cvtColor(img_to_align, cv2.COLOR_BGR2GRAY)
 
-def align_images_sift(reference_image_path, image_to_align_path, save_path="aligned_image.png"):
+    sift = cv2.SIFT_create(nfeatures=max_features)
+    kp_ref, des_ref = sift.detectAndCompute(gray_ref, None)
+    kp_align, des_align = sift.detectAndCompute(gray_align, None)
 
-    print("[INFO] Starting SIFT feature-based alignment...")
+    flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
+    matches = flann.knnMatch(des_ref, des_align, k=2)
 
-    # Load both images
-    ref_img = cv2.imread(reference_image_path, cv2.IMREAD_GRAYSCALE)
-    img_to_align = cv2.imread(image_to_align_path, cv2.IMREAD_GRAYSCALE)
+    # Lowe's ratio test
+    good_matches = [m1 for m1, m2 in matches if m1.distance < good_match_percent * m2.distance]
 
-    # If second image doesn't exist, just explain and exit
-    if img_to_align is None:
-        print("[INFO] No second image provided — function implemented but not executed.")
-        print("       This function is ready for use when a second image is available.")
+    # Draw matches
+    match_img = cv2.drawMatches(ref_img, kp_ref, img_to_align, kp_align, good_matches, None, flags=2)
+    cv2.imwrite(save_matches_path, match_img)
+    print(f"[INFO] Matches saved to {save_matches_path}")
+
+    if len(good_matches) < 4:
+        print("[WARN] Not enough matches for homography")
         return
 
-    # Initialize SIFT
-    sift = cv2.SIFT_create()
-    kp1, des1 = sift.detectAndCompute(ref_img, None)
-    kp2, des2 = sift.detectAndCompute(img_to_align, None)
+    # Homography
+    src_pts = np.float32([kp_ref[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp_align[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
-    # Match features
-    FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-    search_params = dict(checks=50)
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches = flann.knnMatch(des1, des2, k=2)
+    H, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+    if H is None:
+        print("[ERROR] Homography could not be computed")
+        return
 
-    # Filter matches using Lowe’s ratio test
-    good_matches = [m for m, n in matches if m.distance < 0.7 * n.distance]
-    print(f"[INFO] Found {len(good_matches)} good matches.")
-
-    if len(good_matches) > 10:
-        src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        H, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-        h, w = ref_img.shape
-        aligned = cv2.warpPerspective(cv2.imread(image_to_align_path), H, (w, h))
-        cv2.imwrite(save_path, aligned)
-        print(f"[INFO] Aligned image saved as: {os.path.abspath(save_path)}")
-    else:
-        print("[WARN] Not enough matches to align the images.")
+    h, w, _ = ref_img.shape
+    aligned_img = cv2.warpPerspective(img_to_align, H, (w, h))
+    cv2.imwrite(save_aligned_path, aligned_img)
+    print(f"[INFO] Aligned image saved to {save_aligned_path}")
 
 
-
-# 3. Run main logic
-
+# ===============================
+# 3. Main Execution
+# ===============================
 if __name__ == "__main__":
-    base_path = r"C:\Users\erlin\Skole_hostsemester_2025\IKT213_Abrahamsen\assignment_4"
-    reference_img_path = os.path.join(base_path, "reference_img.png")
 
-    # Run Harris corner detection
-    harris_corner_detection(reference_img_path, os.path.join(base_path, "harris.png"))
+    reference_img = cv2.imread(reference_path)
+    img_to_align = cv2.imread(align_path)
 
-    # Demonstrate feature-based alignment function (SIFT)
-    # Not required to actually run if only one image is available
-    align_images_sift(reference_img_path, reference_img_path)
+    if reference_img is None or img_to_align is None:
+        print("[ERROR] Could not load images. Check paths and file integrity.")
+    else:
+        # Harris corners
+        detect_harris(reference_img, harris_output)
+
+        # SIFT alignment + matches
+        align_images_sift_custom(img_to_align, reference_img, max_features=5000)
