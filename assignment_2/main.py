@@ -37,12 +37,14 @@ def hue_shifted(image, emptyPictureArray, hue):
     for y in range(height):
         for x in range(width):
             for c in range(channels):
-                colorValue = image[y,x,c] + hue
+                # Convert to int to prevent overflow
+                colorValue = int(image[y, x, c]) + hue
                 if colorValue > 255:
                     colorValue = 255
                 elif colorValue < 0:
                     colorValue = 0
-                emptyPictureArray[y,x,c] = colorValue
+                emptyPictureArray[y, x, c] = colorValue
+
     cv2.imwrite("solutions/Part_7.png", emptyPictureArray)
 
 def smoothing(image):
